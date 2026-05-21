@@ -4,7 +4,7 @@ import logging
 from typing import Dict, Any, List, Optional
 import google.generativeai as genai
 
-from config.settings import settings
+from ai_seekho_backend.config.settings import settings
 from models.intent import IntentParseRequest
 
 logger = logging.getLogger("intent_service")

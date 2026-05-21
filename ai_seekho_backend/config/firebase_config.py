@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 import firebase_admin
 from firebase_admin import credentials, firestore
-from config.settings import settings
+from ai_seekho_backend.config.settings import settings
 
 logger = logging.getLogger("ai_seekho.firebase")
 
@@ -28,8 +28,14 @@ def init_firebase():
                 db = firestore.client()
                 logger.info("Firebase Admin and Firestore client initialized successfully.")
             else:
-                logger.info("Firebase credentials JSON not found. Running in Local/Mock mode without Firebase.")
-                db = None
+                try:
+                    logger.info("Firebase credentials JSON not found. Attempting Application Default Credentials (ADC) fallback...")
+                    firebase_admin.initialize_app()
+                    db = firestore.client()
+                    logger.info("Firebase Admin and Firestore client initialized successfully via ADC.")
+                except Exception as adc_e:
+                    logger.info(f"Firebase ADC initialization failed: {adc_e}. Running in Local/Mock mode without Firebase.")
+                    db = None
                 
         except Exception as e:
             logger.info(f"Firebase initialization bypassed: {e}. Running in Local/Mock mode.")

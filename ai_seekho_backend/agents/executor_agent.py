@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from agents.shared.state import AgentHandoff
 from agents.shared.tools import execute_tool
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 
 logger = logging.getLogger("executor_agent")
 

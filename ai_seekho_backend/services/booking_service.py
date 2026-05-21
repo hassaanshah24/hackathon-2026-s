@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 from services.provider_service import get_all_providers, get_matching_providers
 from services.scheduling_service import validate_provider_schedule
 

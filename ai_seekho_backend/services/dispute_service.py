@@ -3,9 +3,9 @@ import json
 from typing import Dict, Any, List, Optional
 import google.generativeai as genai
 
-from config.settings import settings
+from ai_seekho_backend.config.settings import settings
 from models.dispute import DisputeModel, DisputeResolution
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 
 logger = logging.getLogger("dispute_service")
 

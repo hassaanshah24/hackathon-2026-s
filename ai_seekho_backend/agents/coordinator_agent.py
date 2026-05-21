@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
 
-from config.settings import settings
+from ai_seekho_backend.config.settings import settings
 from agents.shared.state import CoordinatorState, AgentHandoff
 from agents.shared.prompts import MULTILINGUAL_PARSER_PROMPT
 from agents.shared.tools import ALL_TOOL_DECLARATIONS, execute_tool

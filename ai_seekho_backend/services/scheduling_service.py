@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 
 logger = logging.getLogger("scheduling_service")
 

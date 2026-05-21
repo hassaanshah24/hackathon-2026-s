@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 from models.provider import ProviderModel
 
 logger = logging.getLogger("provider_service")

@@ -14,8 +14,8 @@ from typing import Any, Dict, Optional
 
 import google.generativeai as genai
 
-from config.settings import settings
-from config.firebase_config import db
+from ai_seekho_backend.config.settings import settings
+from ai_seekho_backend.config.firebase_config import db
 from agents.shared.prompts import GUARDIAN_SYSTEM_PROMPT
 from agents.shared.tools import execute_tool, ALL_TOOL_DECLARATIONS
 

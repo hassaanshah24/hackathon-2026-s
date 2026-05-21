@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("seed_firestore")
 
 # Local imports
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 
 DATA_DIR = Path(__file__).resolve().parent
 DATA_DIR.mkdir(parents=True, exist_ok=True)

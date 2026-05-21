@@ -4,7 +4,7 @@ from typing import Dict, Any, List
 from datetime import datetime
 import uuid
 
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 from models.agent_trace import AgentTraceModel, TraceStep
 from services.intent_service import parse_user_intent
 from services.provider_service import get_matching_providers

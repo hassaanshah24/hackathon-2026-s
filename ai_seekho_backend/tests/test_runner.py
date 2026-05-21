@@ -9,7 +9,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
 # Local imports
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 from services.intent_service import parse_user_intent
 from services.provider_service import get_matching_providers
 from services.pricing_service import generate_price_quote

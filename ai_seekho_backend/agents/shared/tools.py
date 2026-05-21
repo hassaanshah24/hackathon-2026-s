@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
 
-from config.firebase_config import db
+from ai_seekho_backend.config.firebase_config import db
 from services.intent_service import parse_user_intent
 from services.provider_service import get_matching_providers
 from services.pricing_service import generate_price_quote
