@@ -5,42 +5,24 @@ import asyncio
 import uuid
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # Local imports
-from config.settings import settings
-from config.firebase_config import db
-from orchestrator.agent_coordinator import run_orchestrated_matching, yield_orchestrated_matching
-from services.provider_service import get_all_providers
-from services.dispute_service import mediate_dispute
-from services.scheduling_service import validate_provider_schedule
-from models.booking import BookingModel
+from ai_seekho_backend.config.settings import settings
+from ai_seekho_backend.config.firebase_config import db
+from ai_seekho_backend.orchestrator.agent_coordinator import run_orchestrated_matching, yield_orchestrated_matching
+from ai_seekho_backend.services.provider_service import get_all_providers
+from ai_seekho_backend.services.dispute_service import mediate_dispute
+from ai_seekho_backend.services.scheduling_service import validate_provider_schedule
+from ai_seekho_backend.models.booking import BookingModel
 
 # New agent imports
-from agents.coordinator_agent import CoordinatorAgent
-from agents.executor_agent import ExecutorAgent
-from agents.guardian_agent import GuardianAgent
-from agents.shared.state import CoordinatorState, AgentHandoff
-from orchestrator.antigravity_workflow import (
-    run_coordinate_node,
-    run_execute_node,
-    run_resolve_node,
-    get_platform_status,
-)
-from services.booking_service import (
-    list_provider_bookings,
-    provider_dashboard_stats,
-    list_chat_messages,
-    post_chat_message,
-    auto_reschedule_after_provider_cancel,
-    get_booking,
-    estimate_eta_minutes,
-    DEFAULT_PROVIDER_ID,
-)
+from ai_seekho_backend.agents.coordinator_agent import CoordinatorAgent
+from ai_seekho_backend.agents.executor_agent import ExecutorAgent
+from ai_seekho_backend.agents.guardian_agent import GuardianAgent
+from ai_seekho_backend.agents.shared.state import CoordinatorState, AgentHandoff
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -52,47 +34,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-import re
-
-# Parse CORS Origins from settings
-cors_origins_raw = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
-origins = []
-origin_regexes = []
-
-for origin in cors_origins_raw:
-    if "*" in origin:
-        regex_str = re.escape(origin).replace(r"\*", ".*")
-        origin_regexes.append(regex_str)
-    else:
-        origins.append(origin)
-
-cors_kwargs = {
-    "allow_credentials": True,
-    "allow_methods": ["*"],
-    "allow_headers": ["*"],
-}
-
-if origins:
-    cors_kwargs["allow_origins"] = origins
-if origin_regexes:
-    cors_kwargs["allow_origin_regex"] = "^(" + "|".join(origin_regexes) + ")$"
-
 # Enable CORS for frontend integrations (Flutter, React, etc.)
 app.add_middleware(
     CORSMiddleware,
-    **cors_kwargs
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": "Validation error",
-            "errors": exc.errors(),
-            "message": "The request payload or parameters are invalid or incomplete."
-        }
-    )
 
 # Active WebSocket connections registry
 class ConnectionManager:
@@ -153,33 +102,6 @@ class DisputeCreateRequest(BaseModel):
     description: str
 
 # ----------------------------------------------------
-# Authentication Middleware
-# ----------------------------------------------------
-def get_current_user_id(
-    authorization: Optional[str] = Header(None),
-    x_user_id: Optional[str] = Header(None)
-) -> str:
-    # 1. Dev mode override
-    if settings.ENV == "development" and x_user_id:
-        return x_user_id
-
-    # 2. Firebase token verification
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split("Bearer ")[1]
-        try:
-            import firebase_admin.auth
-            decoded_token = firebase_admin.auth.verify_id_token(token)
-            return decoded_token.get("uid")
-        except Exception as e:
-            raise HTTPException(status_code=401, detail=f"Invalid authentication token: {e}")
-
-    # Fallback for dev mode
-    if settings.ENV == "development":
-        return "user_demo_001"
-        
-    raise HTTPException(status_code=401, detail="Unauthorized")
-
-# ----------------------------------------------------
 # HTTP API Endpoints
 # ----------------------------------------------------
 @app.get("/")
@@ -188,8 +110,7 @@ def read_root():
         "status": "online",
         "app": "AI Seekho Engine",
         "firebase_active": db is not None,
-        "gemini_active": bool(settings.GEMINI_API_KEY),
-        "antigravity": get_platform_status(),
+        "gemini_api_active": bool(settings.GEMINI_API_KEY)
     }
 
 @app.post("/api/match")
@@ -244,11 +165,9 @@ def create_booking(req: BookingCreateRequest):
     providers = get_all_providers()
     provider_slots = []
     provider_found = False
-    provider_name = "Unknown Provider"
     for p in providers:
         if p.get("pid") == req.provider_id:
             provider_slots = p.get("availability_slots", [])
-            provider_name = p.get("name", provider_name)
             provider_found = True
             break
             
@@ -266,7 +185,6 @@ def create_booking(req: BookingCreateRequest):
         "bid": bid,
         "user_id": req.user_id,
         "provider_id": req.provider_id,
-        "provider_name": provider_name,
         "service_type": req.service_type,
         "status": "pending",
         "scheduled_time": req.scheduled_time,
@@ -443,12 +361,6 @@ class BookingStatusRequest(BaseModel):
     status: str
 
 
-class BookingPatchRequest(BaseModel):
-    """PATCH body for /api/v1/booking/{bid}/status — status and/or scheduled_time."""
-    status: Optional[str] = None
-    scheduled_time: Optional[str] = None
-
-
 # ── Endpoints ─────────────────────────────────────────────────────
 
 @app.post("/api/v1/agent/coordinate")
@@ -479,7 +391,7 @@ async def agent_coordinate(req: CoordinateRequest):
         })
 
         coordinator = _get_coordinator()
-        result = run_coordinate_node(coordinator, state)
+        result = coordinator.run(state)
 
         # Broadcast progressive trace events to simulate real-time thought logs
         for evt in result.get("trace_events", []):
@@ -530,7 +442,6 @@ async def agent_coordinate(req: CoordinateRequest):
             "confidence": result.get("confidence", 0.0),
             "trace_id": trace_id,
             "handoff": result.get("handoff"),
-            "antigravity": result.get("antigravity"),
             "updated_state": updated.model_dump() if updated else None
         }
         return result_out
@@ -541,21 +452,15 @@ async def agent_coordinate(req: CoordinateRequest):
 
 
 @app.post("/api/v1/agent/execute")
-async def agent_execute(req: ExecuteRequest, uid: str = Depends(get_current_user_id)):
+async def agent_execute(req: ExecuteRequest):
     """
     Runs the ExecutorAgent: locks the booking slot, creates Firestore record,
     schedules simulated reminders. Called after user confirms from CoordinatorAgent.
     """
     try:
-        if req.handoff.get("full_context", {}).get("user_id") != uid:
-            # Fallback check for missing user_id in handoff
-            if not req.handoff.get("full_context", {}).get("user_id") and settings.ENV == "development":
-                req.handoff.setdefault("full_context", {})["user_id"] = uid
-            else:
-                raise HTTPException(status_code=403, detail="Forbidden: User ID mismatch in handoff context")
         handoff = AgentHandoff(**req.handoff)
         executor = _get_executor()
-        result = run_execute_node(executor, handoff)
+        result = executor.execute_booking(handoff)
         return result
     except Exception as e:
         logger.error(f"agent_execute error: {e}", exc_info=True)
@@ -563,61 +468,32 @@ async def agent_execute(req: ExecuteRequest, uid: str = Depends(get_current_user
 
 
 @app.post("/api/v1/agent/resolve")
-async def agent_resolve(req: ResolveDisputeRequest, uid: str = Depends(get_current_user_id)):
+async def agent_resolve(req: ResolveDisputeRequest):
     """
     Runs the GuardianAgent: resolves the dispute using Gemini reasoning + deterministic
     refund table. Escalates to human if refund > PKR 2000 or manager requested.
     """
-    if req.user_id != uid:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    mapping = {
-        "poor service": "quality",
-        "poor_service": "quality",
-        "poorservice": "quality",
-        "other": "quality",
-        "quality": "quality",
-        "no show": "no_show",
-        "no_show": "no_show",
-        "noshow": "no_show",
-        "overcharged": "price",
-        "price": "price",
-        "overrun": "overrun",
-        "cancellation": "cancellation"
-    }
-    normalized_type = mapping.get(req.dispute_type.strip().lower(), req.dispute_type.strip())
-    allowed_types = ["no_show", "quality", "price", "overrun", "cancellation"]
-    if normalized_type not in allowed_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid dispute_type '{req.dispute_type}'. Must be one of: {', '.join(allowed_types)}"
-        )
     try:
         dispute_id = f"DS-{uuid.uuid4().hex[:6].upper()}"
         guardian = _get_guardian()
-        result = run_resolve_node(
-            guardian,
+        result = guardian.resolve_dispute(
             dispute_id=dispute_id,
             booking_id=req.booking_id,
-            dispute_type=normalized_type,
-            description=req.description,
+            dispute_type=req.dispute_type,
+            description=req.description
         )
         return result
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"agent_resolve error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"GuardianAgent error: {str(e)}")
 
 
-
 @app.post("/api/v1/feedback/submit")
-async def submit_feedback(req: FeedbackRequest, uid: str = Depends(get_current_user_id)):
+async def submit_feedback(req: FeedbackRequest):
     """
     Submits booking feedback and updates provider reputation via GuardianAgent.
     Returns saved status and new provider rating.
     """
-    if req.user_id != uid:
-        raise HTTPException(status_code=403, detail="Forbidden")
     try:
         guardian = _get_guardian()
         result = guardian.collect_feedback(
@@ -633,13 +509,11 @@ async def submit_feedback(req: FeedbackRequest, uid: str = Depends(get_current_u
 
 
 @app.get("/api/v1/bookings")
-async def get_user_bookings(user_id: str, uid: str = Depends(get_current_user_id)):
+async def get_user_bookings(user_id: str):
     """
     Returns all bookings for a user_id from Firestore.
     Falls back to empty list if Firestore is unavailable.
     """
-    if user_id != uid:
-        raise HTTPException(status_code=403, detail="Forbidden")
     if not db:
         return {"bookings": [], "count": 0, "source": "firestore_unavailable"}
 
@@ -662,153 +536,33 @@ async def get_user_bookings(user_id: str, uid: str = Depends(get_current_user_id
         return {"bookings": [], "count": 0, "error": str(e)}
 
 
-class ProviderStatusRequest(BaseModel):
-    status: str
-
-
-class ChatMessageRequest(BaseModel):
-    sender_id: str
-    sender_role: str  # consumer | provider
-    text: str
-
-
-@app.get("/api/v1/provider/{provider_id}/dashboard")
-async def provider_dashboard(provider_id: str, uid: str = Depends(get_current_user_id)):
-    """Provider workload stats and upcoming/active job lists."""
-    _ = uid
-    return provider_dashboard_stats(provider_id)
-
-
-@app.get("/api/v1/provider/{provider_id}/bookings")
-async def provider_bookings(provider_id: str, uid: str = Depends(get_current_user_id)):
-    _ = uid
-    bookings = list_provider_bookings(provider_id)
-    return {"bookings": bookings, "count": len(bookings)}
-
-
-@app.patch("/api/v1/provider/booking/{bid}/status")
-async def provider_booking_status(
-    bid: str,
-    req: ProviderStatusRequest,
-    uid: str = Depends(get_current_user_id),
-):
-    """Provider updates job status (en_route, in_progress, completed, cancelled)."""
-    _ = uid
-    valid = ["confirmed", "en_route", "in_progress", "completed", "cancelled"]
-    if req.status not in valid:
-        raise HTTPException(status_code=400, detail=f"status must be one of {valid}")
-    result = {"bid": bid, "new_status": req.status, "updated_at": datetime.now().isoformat()}
-    if not db:
-        result["warning"] = "firestore_unavailable"
-        return result
-    db.collection("bookings").document(bid).update(
-        {"status": req.status, "updated_at": result["updated_at"]}
-    )
-    if req.status == "cancelled":
-        result["auto_reschedule_hint"] = (
-            f"POST /api/v1/booking/{bid}/auto-reschedule for alternate provider"
-        )
-    return result
-
-
-@app.post("/api/v1/booking/{bid}/auto-reschedule")
-async def booking_auto_reschedule(
-    bid: str,
-    uid: str = Depends(get_current_user_id),
-    lat: float = 33.649,
-    lng: float = 72.973,
-):
-    """Consumer accepts alternate provider after cancellation."""
-    booking = get_booking(bid)
-    if booking and booking.get("user_id") != uid and settings.ENV != "development":
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return auto_reschedule_after_provider_cancel(bid, lat, lng)
-
-
-@app.get("/api/v1/booking/{bid}/messages")
-async def booking_messages(bid: str, uid: str = Depends(get_current_user_id)):
-    booking = get_booking(bid)
-    if booking and booking.get("user_id") != uid and settings.ENV != "development":
-        raise HTTPException(status_code=403, detail="Forbidden")
-    return {"messages": list_chat_messages(bid)}
-
-
-@app.post("/api/v1/booking/{bid}/messages")
-async def booking_post_message(
-    bid: str,
-    req: ChatMessageRequest,
-    uid: str = Depends(get_current_user_id),
-):
-    booking = get_booking(bid)
-    if booking and booking.get("user_id") != uid and req.sender_role == "consumer":
-        if settings.ENV != "development":
-            raise HTTPException(status_code=403, detail="Forbidden")
-    msg = post_chat_message(bid, req.sender_id or uid, req.sender_role, req.text)
-    return {"message": msg}
-
-
-@app.get("/api/v1/booking/{bid}/eta")
-async def booking_eta(bid: str):
-    booking = get_booking(bid) or {}
-    dist = float(booking.get("distance_km") or 3.0)
-    status = (booking.get("status") or "").lower()
-    eta = estimate_eta_minutes(dist, status)
-    return {"bid": bid, "status": status, "distance_km": dist, "eta_minutes": eta}
-
-
 @app.patch("/api/v1/booking/{bid}/status")
-async def update_booking_status(bid: str, req: BookingPatchRequest):
+async def update_booking_status(bid: str, req: BookingStatusRequest):
     """
-    Updates booking status and/or scheduled_time.
-    At least one of status or scheduled_time must be provided.
+    Updates booking status. Valid statuses: confirmed, en_route, in_progress, completed, cancelled.
     """
-    if not req.status and not req.scheduled_time:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one of 'status' or 'scheduled_time' is required."
-        )
-
     valid_statuses = ["confirmed", "en_route", "in_progress", "completed", "cancelled", "pending", "disputed"]
-    if req.status and req.status not in valid_statuses:
+    if req.status not in valid_statuses:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid status '{req.status}'. Must be one of: {valid_statuses}"
         )
 
-    if req.scheduled_time:
-        try:
-            datetime.fromisoformat(req.scheduled_time.replace("Z", "+00:00") if req.scheduled_time.endswith("Z") else req.scheduled_time)
-        except Exception:
-            raise HTTPException(status_code=400, detail="scheduled_time must be valid ISO 8601 format.")
-
-    updated_at = datetime.now().isoformat()
-    update_payload: Dict[str, Any] = {"updated_at": updated_at}
-    if req.status:
-        update_payload["status"] = req.status
-    if req.scheduled_time:
-        update_payload["scheduled_time"] = req.scheduled_time
-
     if not db:
-        return {
-            "bid": bid,
-            "new_status": req.status,
-            "scheduled_time": req.scheduled_time,
-            "updated_at": updated_at,
-            "warning": "Firestore unavailable — changes not persisted"
-        }
+        return {"bid": bid, "new_status": req.status, "updated_at": datetime.now().isoformat(),
+                "warning": "Firestore unavailable — status not persisted"}
 
     try:
-        db.collection("bookings").document(bid).update(update_payload)
-        logger.info(f"Booking {bid} patched: {update_payload}")
-        return {
-            "bid": bid,
-            "new_status": req.status,
-            "scheduled_time": req.scheduled_time,
-            "updated_at": updated_at,
-        }
+        updated_at = datetime.now().isoformat()
+        db.collection("bookings").document(bid).update({
+            "status": req.status,
+            "updated_at": updated_at
+        })
+        logger.info(f"Booking {bid} status updated to '{req.status}'.")
+        return {"bid": bid, "new_status": req.status, "updated_at": updated_at}
     except Exception as e:
         logger.error(f"update_booking_status error: {e}")
-        raise HTTPException(status_code=500, detail=f"Booking update failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Status update failed: {str(e)}")
 
 
 # ── New Agent-Stream WebSocket ────────────────────────────────────
@@ -856,7 +610,7 @@ async def websocket_agent_stream(websocket: WebSocket):
                     "timestamp": datetime.now().isoformat()
                 })
 
-                result = run_coordinate_node(coordinator, state)
+                result = coordinator.run(state)
 
                 # Replay all trace events
                 for evt in result.get("trace_events", []):
@@ -876,7 +630,6 @@ async def websocket_agent_stream(websocket: WebSocket):
                     })
 
                 # Final completed event with full result
-                updated_state = result.get("updated_state")
                 await websocket.send_json({
                     "event": "completed",
                     "content": result.get("message", ""),
@@ -884,14 +637,6 @@ async def websocket_agent_stream(websocket: WebSocket):
                     "confidence": result.get("confidence", 0.0),
                     "providers": result.get("providers"),
                     "quote": result.get("quote"),
-                    "handoff": result.get("handoff"),
-                    "antigravity": result.get("antigravity"),
-                    "extracted_fields": (
-                        updated_state.extracted_fields
-                        if updated_state and hasattr(updated_state, "extracted_fields")
-                        else {}
-                    ),
-                    "trace_events": result.get("trace_events", []),
                     "timestamp": datetime.now().isoformat()
                 })
 
